@@ -1,6 +1,6 @@
 streamlit>=1.20
 pdfplumber
-sentence-transformers>=2.2.2
+sentence-transformers
 faiss-cpu
 numpy
 pandas
