@@ -52,7 +52,10 @@ def chunk_text(text, chunk_size=800, overlap=150):
 # ----------------------------
 class EmbeddingClient:
     def __init__(self):
-        self.model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        self.model = SentenceTransformer(
+            "sentence-transformers/all-MiniLM-L6-v2",
+            use_auth_token=os.getenv("HF_API_KEY")
+        )
 
     def embed_batch(self, texts: List[str]):
         return self.model.encode(texts, convert_to_numpy=True)
