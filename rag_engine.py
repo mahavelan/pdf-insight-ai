@@ -27,14 +27,14 @@ except Exception:
 
 
 # ----------------------------
-# MODEL CONFIG (BEST CHOICE)
+# MODEL CONFIG
 # ----------------------------
 HF_API_URL = "https://api-inference.huggingface.co"
 
-# BEST embedding model (accurate retrieval)
+# Working embedding model (supports new HF embedding API)
 HF_EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-# BEST generation model (high quality answers)
+# Generation model
 HF_GEN_MODEL = "mistralai/Mistral-7B-Instruct-v0.1"
 
 
@@ -73,7 +73,7 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 150):
 # EMBEDDING CLIENT
 # ----------------------------
 class EmbeddingClient:
-    def __init__(self, hf_api_key: Optional[str] = None, local_model_name="all-mpnet-base-v2"):
+    def __init__(self, hf_api_key: Optional[str] = None, local_model_name="all-MiniLM-L6-v2"):
         self.hf_key = hf_api_key or os.getenv("HF_API_KEY")
         self.local = None
 
@@ -89,34 +89,32 @@ class EmbeddingClient:
         elif self.local is not None:
             return self.local.encode(texts, convert_to_numpy=True)
         else:
-            raise RuntimeError("No available embedding model.")
+            raise RuntimeError("No embedding model available.")
 
     def _embed_hf(self, texts):
-    url = f"{HF_API_URL}/models/{HF_EMBED_MODEL}"
-    headers = {"Authorization": f"Bearer {self.hf_key}"}
+        url = f"{HF_API_URL}/models/{HF_EMBED_MODEL}"
+        headers = {"Authorization": f"Bearer {self.hf_key}"}
 
-    payload = {
-        "inputs": texts,
-        "parameters": {"truncate": True},
-        "options": {"wait_for_model": True}
-    }
+        payload = {
+            "inputs": texts,
+            "parameters": {"truncate": True},
+            "options": {"wait_for_model": True}
+        }
 
-    r = requests.post(url, headers=headers, json=payload)
-    r.raise_for_status()
-    data = r.json()
+        r = requests.post(url, headers=headers, json=payload)
+        r.raise_for_status()
+        data = r.json()
 
-    # Extract embeddings from HF output
-    vectors = []
-    for item in data:
-        if isinstance(item, list):
-            vectors.append(item[0])  # feature-extraction returns list of lists
-        elif isinstance(item, dict) and "embedding" in item:
-            vectors.append(item["embedding"])
-        else:
-            raise ValueError("Unexpected embedding output format.")
+        vectors = []
+        for item in data:
+            if isinstance(item, list):
+                vectors.append(item[0])  # first token embedding
+            elif isinstance(item, dict) and "embedding" in item:
+                vectors.append(item["embedding"])
+            else:
+                raise ValueError("Unexpected embedding output.")
 
-    return np.array(vectors).astype("float32")
-
+        return np.array(vectors).astype("float32")
 
 
 # ----------------------------
@@ -125,13 +123,11 @@ class EmbeddingClient:
 class FaissIndex:
     def __init__(self, dim: int):
         if not _HAS_FAISS:
-            raise RuntimeError("FAISS not installed. Use: pip install faiss-cpu")
-
+            raise RuntimeError("FAISS not installed.")
         self.index = faiss.IndexFlatIP(dim)
         self.metadatas = []
 
     def add(self, vectors, metas):
-        # Normalize for cosine similarity
         vectors = vectors / (np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-8)
         self.index.add(vectors.astype("float32"))
         self.metadatas.extend(metas)
@@ -139,13 +135,11 @@ class FaissIndex:
     def search(self, query_vec, top_k=5):
         q = query_vec / (np.linalg.norm(query_vec) + 1e-8)
         scores, idxs = self.index.search(q.reshape(1, -1), top_k)
-        idxs = idxs[0]
-        scores = scores[0]
 
         results = []
-        for i, s in zip(idxs, scores):
-            if i >= 0:
-                results.append((self.metadatas[i], float(s)))
+        for idx, score in zip(idxs[0], scores[0]):
+            if idx >= 0:
+                results.append((self.metadatas[idx], float(score)))
         return results
 
 
@@ -155,17 +149,15 @@ class FaissIndex:
 def build_rag_from_pdf(pdf_path, emb_client):
     text = extract_text_from_pdf(pdf_path)
     chunks = chunk_text(text, chunk_size=1000, overlap=200)
-
     chunk_texts = [c[0] for c in chunks]
+
     embeddings = emb_client.embed_batch(chunk_texts)
-
     dim = embeddings.shape[1]
-    index = FaissIndex(dim)
 
+    index = FaissIndex(dim)
     metas = [{"text": c[0], "start": c[1], "end": c[2]} for c in chunks]
 
     index.add(embeddings, metas)
-
     return index, chunks
 
 
@@ -191,16 +183,18 @@ def generate_answer_with_hf(hf_api_key, question, contexts, max_length=256):
 
     prompt = (
         "Use ONLY the context below to answer the question.\n"
-        "If answer is not found, say 'I don't know.'\n\n"
+        "If answer is not in the context, say 'I don't know.'\n\n"
         f"Context:\n{context_block}\n\n"
         f"Question: {question}\nAnswer:"
     )
 
-    payload = {"inputs": prompt, "parameters": {"max_new_tokens": max_length, "temperature": 0.1}}
+    payload = {
+        "inputs": prompt,
+        "parameters": {"max_new_tokens": max_length, "temperature": 0.1}
+    }
 
     r = requests.post(url, headers=headers, json=payload)
     r.raise_for_status()
-
     data = r.json()
 
     if isinstance(data, list) and "generated_text" in data[0]:
