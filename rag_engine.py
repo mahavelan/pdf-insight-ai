@@ -13,7 +13,8 @@ from sentence_transformers import SentenceTransformer
 import faiss
 
 HF_API_URL = "https://api-inference.huggingface.co"
-HF_GEN_MODEL = "google/flan-t5-base"
+HF_GEN_MODEL = "google/flan-ul2"
+
 
 
 
