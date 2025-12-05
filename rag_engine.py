@@ -32,7 +32,7 @@ except Exception:
 HF_API_URL = "https://api-inference.huggingface.co"
 
 # BEST embedding model (accurate retrieval)
-HF_EMBED_MODEL = "sentence-transformers/all-mpnet-base-v2"
+HF_EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 # BEST generation model (high quality answers)
 HF_GEN_MODEL = "mistralai/Mistral-7B-Instruct-v0.1"
