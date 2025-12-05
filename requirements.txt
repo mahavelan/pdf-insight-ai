@@ -1,0 +1,9 @@
+streamlit>=1.20
+pdfplumber
+sentence-transformers>=2.2.2
+faiss-cpu
+numpy
+pandas
+requests
+tqdm
+python-dotenv
