@@ -92,22 +92,31 @@ class EmbeddingClient:
             raise RuntimeError("No available embedding model.")
 
     def _embed_hf(self, texts):
-        url = f"{HF_API_URL}/embeddings/{HF_EMBED_MODEL}"
-        headers = {"Authorization": f"Bearer {self.hf_key}"}
+    url = f"{HF_API_URL}/models/{HF_EMBED_MODEL}"
+    headers = {"Authorization": f"Bearer {self.hf_key}"}
 
-        response = requests.post(url, headers=headers, json={"inputs": texts})
-        response.raise_for_status()
+    payload = {
+        "inputs": texts,
+        "parameters": {"truncate": True},
+        "options": {"wait_for_model": True}
+    }
 
-        data = response.json()
-        vectors = []
+    r = requests.post(url, headers=headers, json=payload)
+    r.raise_for_status()
+    data = r.json()
 
-        for item in data:
-            if isinstance(item, dict) and "embedding" in item:
-                vectors.append(item["embedding"])
-            else:
-                vectors.append(item)
+    # Extract embeddings from HF output
+    vectors = []
+    for item in data:
+        if isinstance(item, list):
+            vectors.append(item[0])  # feature-extraction returns list of lists
+        elif isinstance(item, dict) and "embedding" in item:
+            vectors.append(item["embedding"])
+        else:
+            raise ValueError("Unexpected embedding output format.")
 
-        return np.array(vectors).astype("float32")
+    return np.array(vectors).astype("float32")
+
 
 
 # ----------------------------
