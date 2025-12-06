@@ -130,7 +130,7 @@ def generate_answer_via_space(question: str, contexts: List[str], max_length: in
     # ⭐ IMPORTANT FIX: call the new 'ask' endpoint
     result = _space_client.predict(
         prompt,
-        api_name="ask"
+        api_name="/ask"
     )
 
     return str(result)
