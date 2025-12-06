@@ -9,9 +9,10 @@ import requests
 from sentence_transformers import SentenceTransformer
 import faiss
 
+# ⭐ Gradio client to call your HuggingFace Space
 from gradio_client import Client
 
-# --- your Space ID on Hugging Face ---
+# ⭐ Your Space ID
 SPACE_ID = "mahasenthilvelan/pdf-insight-llm"
 _space_client = Client(SPACE_ID)
 
@@ -33,7 +34,7 @@ def extract_text_from_pdf(path: str) -> str:
 # TEXT CHUNKING
 # ----------------------------
 def chunk_text(text: str, chunk_size: int = 800, overlap: int = 150):
-    chunks: List[Tuple[str, int, int]] = []
+    chunks = []
     text = text.replace("\r", " ")
     length = len(text)
     start = 0
@@ -48,38 +49,30 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 150):
 
 
 # ----------------------------
-# LOCAL EMBEDDINGS (MiniLM)
+# EMBEDDING MODEL (Local MiniLM)
 # ----------------------------
 class EmbeddingClient:
     def __init__(self):
-        # Use HF token if provided (for downloading the model)
-        hf_token = os.getenv("HF_API_KEY")
-        if hf_token:
-            self.model = SentenceTransformer(
-                "sentence-transformers/all-MiniLM-L6-v2",
-                use_auth_token=hf_token,
-            )
-        else:
-            self.model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        self.model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-    def embed_batch(self, texts: List[str]) -> np.ndarray:
+    def embed_batch(self, texts: List[str]):
         return self.model.encode(texts, convert_to_numpy=True)
 
 
 # ----------------------------
-# FAISS INDEX
+# VECTOR INDEX (FAISS)
 # ----------------------------
 class FaissIndex:
     def __init__(self, dim: int):
         self.index = faiss.IndexFlatIP(dim)
-        self.meta: List[dict] = []
+        self.meta = []
 
-    def add(self, vectors: np.ndarray, metadatas: List[dict]):
+    def add(self, vectors, metadatas):
         vectors = vectors / (np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-8)
         self.index.add(vectors.astype("float32"))
         self.meta.extend(metadatas)
 
-    def search(self, vec: np.ndarray, top_k: int = 4):
+    def search(self, vec, top_k=4):
         vec = vec / (np.linalg.norm(vec) + 1e-8)
         scores, idxs = self.index.search(vec.reshape(1, -1), top_k)
         results = []
@@ -92,7 +85,7 @@ class FaissIndex:
 # ----------------------------
 # BUILD RAG INDEX
 # ----------------------------
-def build_rag_from_pdf(pdf_path: str, emb_client: EmbeddingClient):
+def build_rag_from_pdf(pdf_path, emb_client: EmbeddingClient):
     text = extract_text_from_pdf(pdf_path)
     chunks = chunk_text(text)
 
@@ -111,7 +104,7 @@ def build_rag_from_pdf(pdf_path: str, emb_client: EmbeddingClient):
 # ----------------------------
 # QUERY RAG
 # ----------------------------
-def query_rag(index: FaissIndex, emb_client: EmbeddingClient, question: str, top_k: int = 4):
+def query_rag(index, emb_client, question, top_k=4):
     q_emb = emb_client.embed_batch([question])[0]
     hits = index.search(q_emb, top_k)
 
@@ -122,28 +115,22 @@ def query_rag(index: FaissIndex, emb_client: EmbeddingClient, question: str, top
 
 
 # ----------------------------
-# GENERATE ANSWER VIA YOUR HF SPACE
+# ⭐ GENERATE ANSWER USING YOUR HF SPACE
 # ----------------------------
-def generate_answer_via_space(question: str, contexts: List[str], max_length: int = 256) -> str:
-    """
-    Calls your Hugging Face Space (Gradio) as an LLM backend.
-    """
-    # Build prompt for LLM using retrieved context
+def generate_answer_via_space(question: str, contexts: List[str], max_length: int = 256):
     context_text = "\n\n---\n\n".join(contexts)
 
     prompt = (
-        "You are an AI assistant for question answering over documents.\n"
-        "Use ONLY the context below to answer the question.\n"
-        "If the answer is not in the context, say 'I don't know.'\n\n"
+        "Answer ONLY using the context below.\n"
+        "If the answer is not found, say 'I don't know.'\n\n"
         f"Context:\n{context_text}\n\n"
         f"Question: {question}\nAnswer:"
     )
 
-    # Call your Space using gradio_client
-    # For a simple Interface, api_name is usually "/predict"
+    # ⭐ IMPORTANT FIX: call the new 'ask' endpoint
     result = _space_client.predict(
         prompt,
-        api_name="/predict",
+        api_name="ask"
     )
-    # result is the text returned by answer_question()
+
     return str(result)
