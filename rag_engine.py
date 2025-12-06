@@ -1,21 +1,19 @@
 # rag_engine.py
+
 import os
-import json
 from typing import List, Tuple
 import pdfplumber
 import numpy as np
 import requests
 
-# SentenceTransformer local embeddings
 from sentence_transformers import SentenceTransformer
-
-# FAISS vector search
 import faiss
 
-HF_API_URL = "https://api-inference.huggingface.co"
-HF_GEN_MODEL = "google/flan-ul2"
+from gradio_client import Client
 
-
+# --- your Space ID on Hugging Face ---
+SPACE_ID = "mahasenthilvelan/pdf-insight-llm"
+_space_client = Client(SPACE_ID)
 
 
 # ----------------------------
@@ -34,8 +32,8 @@ def extract_text_from_pdf(path: str) -> str:
 # ----------------------------
 # TEXT CHUNKING
 # ----------------------------
-def chunk_text(text, chunk_size=800, overlap=150):
-    chunks = []
+def chunk_text(text: str, chunk_size: int = 800, overlap: int = 150):
+    chunks: List[Tuple[str, int, int]] = []
     text = text.replace("\r", " ")
     length = len(text)
     start = 0
@@ -50,16 +48,21 @@ def chunk_text(text, chunk_size=800, overlap=150):
 
 
 # ----------------------------
-# LOCAL EMBEDDINGS
+# LOCAL EMBEDDINGS (MiniLM)
 # ----------------------------
 class EmbeddingClient:
     def __init__(self):
-        self.model = SentenceTransformer(
-            "sentence-transformers/all-MiniLM-L6-v2",
-            use_auth_token=os.getenv("HF_API_KEY")
-        )
+        # Use HF token if provided (for downloading the model)
+        hf_token = os.getenv("HF_API_KEY")
+        if hf_token:
+            self.model = SentenceTransformer(
+                "sentence-transformers/all-MiniLM-L6-v2",
+                use_auth_token=hf_token,
+            )
+        else:
+            self.model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-    def embed_batch(self, texts: List[str]):
+    def embed_batch(self, texts: List[str]) -> np.ndarray:
         return self.model.encode(texts, convert_to_numpy=True)
 
 
@@ -67,31 +70,29 @@ class EmbeddingClient:
 # FAISS INDEX
 # ----------------------------
 class FaissIndex:
-    def __init__(self, dim):
+    def __init__(self, dim: int):
         self.index = faiss.IndexFlatIP(dim)
-        self.meta = []
+        self.meta: List[dict] = []
 
-    def add(self, vectors, metas):
+    def add(self, vectors: np.ndarray, metadatas: List[dict]):
         vectors = vectors / (np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-8)
         self.index.add(vectors.astype("float32"))
-        self.meta.extend(metas)
+        self.meta.extend(metadatas)
 
-    def search(self, vec, top_k=4):
+    def search(self, vec: np.ndarray, top_k: int = 4):
         vec = vec / (np.linalg.norm(vec) + 1e-8)
         scores, idxs = self.index.search(vec.reshape(1, -1), top_k)
         results = []
-
         for idx, score in zip(idxs[0], scores[0]):
             if idx >= 0:
                 results.append((self.meta[idx], float(score)))
-
         return results
 
 
 # ----------------------------
 # BUILD RAG INDEX
 # ----------------------------
-def build_rag_from_pdf(pdf_path, emb_client):
+def build_rag_from_pdf(pdf_path: str, emb_client: EmbeddingClient):
     text = extract_text_from_pdf(pdf_path)
     chunks = chunk_text(text)
 
@@ -110,7 +111,7 @@ def build_rag_from_pdf(pdf_path, emb_client):
 # ----------------------------
 # QUERY RAG
 # ----------------------------
-def query_rag(index, emb_client, question, top_k=4):
+def query_rag(index: FaissIndex, emb_client: EmbeddingClient, question: str, top_k: int = 4):
     q_emb = emb_client.embed_batch([question])[0]
     hits = index.search(q_emb, top_k)
 
@@ -121,31 +122,28 @@ def query_rag(index, emb_client, question, top_k=4):
 
 
 # ----------------------------
-# GENERATE ANSWER
+# GENERATE ANSWER VIA YOUR HF SPACE
 # ----------------------------
-def generate_answer_with_hf(hf_api_key, question, contexts, max_length=256):
-    url = f"{HF_API_URL}/models/{HF_GEN_MODEL}"
-    headers = {"Authorization": f"Bearer {hf_api_key}"}
-
+def generate_answer_via_space(question: str, contexts: List[str], max_length: int = 256) -> str:
+    """
+    Calls your Hugging Face Space (Gradio) as an LLM backend.
+    """
+    # Build prompt for LLM using retrieved context
     context_text = "\n\n---\n\n".join(contexts)
 
     prompt = (
-        "You are an AI assistant. Answer ONLY using the context. "
+        "You are an AI assistant for question answering over documents.\n"
+        "Use ONLY the context below to answer the question.\n"
         "If the answer is not in the context, say 'I don't know.'\n\n"
         f"Context:\n{context_text}\n\n"
         f"Question: {question}\nAnswer:"
     )
 
-    payload = {
-        "inputs": prompt,
-        "parameters": {"max_new_tokens": max_length, "temperature": 0.1}
-    }
-
-    r = requests.post(url, headers=headers, json=payload)
-    r.raise_for_status()
-
-    data = r.json()
-    if isinstance(data, list) and "generated_text" in data[0]:
-        return data[0]["generated_text"]
-
-    return str(data)
+    # Call your Space using gradio_client
+    # For a simple Interface, api_name is usually "/predict"
+    result = _space_client.predict(
+        prompt,
+        api_name="/predict",
+    )
+    # result is the text returned by answer_question()
+    return str(result)
