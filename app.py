@@ -1,11 +1,10 @@
 import streamlit as st
 import tempfile
-import os
 from rag_engine import (
     EmbeddingClient,
     build_rag_from_pdf,
     query_rag,
-    generate_answer_with_hf
+    generate_answer_via_space,
 )
 
 st.set_page_config(page_title="PDF Insight AI", layout="wide")
@@ -15,18 +14,11 @@ st.title("📄 PDF Insight AI — Intelligent Q&A System")
 st.write("""
 Upload any PDF and ask questions.
 
-This app uses:
-- Local **MiniLM embeddings** (fast & accurate)
-- **Mistral-7B-Instruct** (HuggingFace API) for generating answers
+**Pipeline:**
+- 🔍 Local MiniLM embeddings + FAISS for retrieval  
+- 🤖 Custom Hugging Face Space (Phi-2) for answer generation  
 """)
 
-# Sidebar: API Key Input
-st.sidebar.header("⚙ Settings")
-hf_key = st.sidebar.text_input("Hugging Face API Key", type="password")
-if not hf_key:
-    hf_key = os.getenv("HF_API_KEY", "")
-
-# PDF Upload
 uploaded_pdf = st.file_uploader("Upload a PDF file", type=["pdf"])
 
 if uploaded_pdf:
@@ -35,34 +27,31 @@ if uploaded_pdf:
         tmp.flush()
         pdf_path = tmp.name
 
-    st.info("⏳ Extracting text and building vector index… Please wait.")
+    st.info("⏳ Extracting text and building vector index…")
 
     try:
-        emb_client = EmbeddingClient()   # ✅ FIXED — NO ARGUMENTS
+        emb_client = EmbeddingClient()
         index, chunks = build_rag_from_pdf(pdf_path, emb_client)
 
-        st.success("✅ Index built successfully! Enter your question below.")
-
+        st.success("✅ Index built successfully! You can now ask questions.")
         st.session_state["index"] = index
         st.session_state["emb_client"] = emb_client
 
     except Exception as e:
         st.error(f"Error while building index: {e}")
 
-# Question Input + Answer
 if "index" in st.session_state:
-    st.subheader("❓ Ask a Question")
+    st.subheader("❓ Ask a Question about the PDF")
 
-    question = st.text_input("Enter your question about this PDF:")
+    question = st.text_input("Enter your question:")
+    top_k = st.slider("Number of context chunks to retrieve:", 1, 8, 4)
 
-    top_k = st.slider("Number of context chunks:", 1, 8, 4)
-
-    if st.button("Get Answer"):
+    if st.button("Get Answer") and question.strip():
         contexts, scores = query_rag(
             st.session_state["index"],
             st.session_state["emb_client"],
             question,
-            top_k=top_k
+            top_k=top_k,
         )
 
         st.markdown("### 🧩 Retrieved Contexts")
@@ -71,9 +60,9 @@ if "index" in st.session_state:
             st.write(ctx)
             st.write("---")
 
-        if not hf_key:
-            st.warning("⚠ Please enter your HuggingFace API key to generate LLM answers.")
-        else:
-            st.markdown("### 🤖 AI Answer")
-            answer = generate_answer_with_hf(hf_key, question, contexts)
+        st.markdown("### 🤖 AI Answer (from your HF Space)")
+        try:
+            answer = generate_answer_via_space(question, contexts)
             st.write(answer)
+        except Exception as e:
+            st.error(f"Error while calling LLM Space: {e}")
